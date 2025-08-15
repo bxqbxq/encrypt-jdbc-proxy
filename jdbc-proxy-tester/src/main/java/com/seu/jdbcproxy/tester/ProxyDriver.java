@@ -103,14 +103,6 @@ public class ProxyDriver implements Driver {
     /* ---------- 工具方法 ---------- */
 
     /** 解析 proxy URL（去掉前缀再交给 URI） */
-//    private URI parseProxyUri(String url) throws SQLException {
-//        try {
-//            return new URI(url.substring(PREFIX.length()));
-//        } catch (URISyntaxException e) {
-//            throw new SQLException("Malformed proxy JDBC URL: " + url, e);
-//        }
-//    }
-
     private URI parseProxyUri(String url) throws SQLException {
         try {
             String cleanUrl = url.substring(PREFIX.length());
