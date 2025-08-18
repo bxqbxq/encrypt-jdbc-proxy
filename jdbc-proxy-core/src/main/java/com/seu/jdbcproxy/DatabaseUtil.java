@@ -46,6 +46,19 @@ public class DatabaseUtil {
         String password = ConfigLoader.get("extra.db.password");
 
         return DriverManager.getConnection(url, user, password);
+    }
 
+    /**
+     * 根据指定的数据库URL获取额外数据库连接
+     * @param extraDbUrl 额外数据库的URL
+     * @return 数据库连接
+     * @throws SQLException 连接异常
+     */
+    public static Connection getExtraDbConnection(String extraDbUrl) throws SQLException {
+        String user = ConfigLoader.get("extra.db.user", "root");
+        String password = ConfigLoader.get("extra.db.password", "200261");
+        
+        logger.info("Connecting to extra database: {}", extraDbUrl);
+        return DriverManager.getConnection(extraDbUrl, user, password);
     }
 }

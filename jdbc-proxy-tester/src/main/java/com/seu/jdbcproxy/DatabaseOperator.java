@@ -40,6 +40,7 @@ public class DatabaseOperator {
         if ("true".equalsIgnoreCase(params.get("extra.enabled"))){
             String extraTable = params.getOrDefault("extra.table","");
             String extraColumns = params.getOrDefault("extra.columns","");
+            String extraDbUrl = params.getOrDefault("extra.db.url","");
 
             String extrasql = "SELECT " + extraColumns + " FROM " + extraTable;
             StringBuilder annotation = new StringBuilder();
@@ -51,6 +52,9 @@ public class DatabaseOperator {
             if (!extraColumns.isEmpty()) {
                 annotation.append(" --@extra.columns=").append(extraColumns);
             }
+            if (!extraDbUrl.isEmpty()) {
+                annotation.append(" --@extra.db.url=").append(extraDbUrl);
+            }
 
             sql += annotation.toString();
             logger.info("额外查询的SQL: {}", sql);
@@ -60,12 +64,6 @@ public class DatabaseOperator {
         try (Connection conn = DatabaseUtil.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql);
              ResultSet rs = stmt.executeQuery()) {
-
-//            ResultSetMetaData meta = rs.getMetaData();
-//            List<String> realColumns = new ArrayList<>();
-//            for (int i = 1; i <= meta.getColumnCount(); i++) {
-//                realColumns.add(meta.getColumnLabel(i));
-//            }
 
             System.out.println("开始遍历结果集");
             while (rs.next()) {
@@ -77,10 +75,6 @@ public class DatabaseOperator {
                 logger.info("[查询结果] {}", sb.toString());
 
 
-//                int id = rs.getInt(1);       //根据不同的查询字段进行修改
-//                String test = rs.getString(2);
-//                System.out.println("ID: " + id + "  Test: " + test); ;
-
             }
         }
     }
@@ -91,12 +85,16 @@ public class DatabaseOperator {
     private void executeInsert(Map<String, String> params) throws SQLException {
         String table = ConfigLoader.get("table.name", "my_table");
         String targetColumn = ConfigLoader.get("insert.column", "test");
-//        String value = params.getOrDefault("insert.value",
-//                ConfigLoader.get("insert.value", "default_value"));
         String value = ConfigLoader.get("insert.value", "test");
+        
+        // 优先使用命令行参数
+        if (params.containsKey("insert.value")) {
+            value = params.get("insert.value");
+        }
 
         String sql = "INSERT INTO " + table + " (" + targetColumn + ") VALUES (?)";
         logger.info("[Insert] SQL: {}", sql);
+        logger.info("[Insert] 插入值: {}", value);
 
         try (Connection conn = DatabaseUtil.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -114,15 +112,20 @@ public class DatabaseOperator {
         String table = ConfigLoader.get("table.name", "my_table");
         String condColumn = ConfigLoader.get("update.condition_column", "id");
         String targetColumn = ConfigLoader.get("update.target_column", "test");
-//        String newValue = params.getOrDefault("update.value",
-//                ConfigLoader.get("update.alue", "new_value"));
-//        String condValue = params.getOrDefault("update.condition_value",
-//                ConfigLoader.get("update.condition.value", "1"));
         String newValue = ConfigLoader.get("update.value", "default_value");
         String condValue = ConfigLoader.get("update.condition_value", "1");
+        
+        // 优先使用命令行参数
+        if (params.containsKey("update.value")) {
+            newValue = params.get("update.value");
+        }
+        if (params.containsKey("update.condition_value")) {
+            condValue = params.get("update.condition_value");
+        }
 
         String sql = "UPDATE " + table + " SET " + targetColumn + " = ? WHERE " + condColumn + " = ?";
         logger.info("[Update] SQL: {}", sql);
+        logger.info("[Update] 新值: {}, 条件值: {}", newValue, condValue);
 
         try (Connection conn = DatabaseUtil.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -140,12 +143,16 @@ public class DatabaseOperator {
     private void executeDelete(Map<String, String> params) throws SQLException {
         String table = ConfigLoader.get("table.name", "my_table");
         String condColumn = ConfigLoader.get("delete.condition_column", "test");
-//        String condValue = params.getOrDefault("condition.value",
-//                ConfigLoader.get("delete.condition.value", "1"));
         String condValue = ConfigLoader.get("delete.condition_value", "default_value");
+        
+        // 优先使用命令行参数
+        if (params.containsKey("delete.condition_value")) {
+            condValue = params.get("delete.condition_value");
+        }
 
         String sql = "DELETE FROM " + table + " WHERE " + condColumn + " = ?";
         logger.info("[Delete] SQL: {}", sql);
+        logger.info("[Delete] 条件值: {}", condValue);
 
         try (Connection conn = DatabaseUtil.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -162,35 +169,60 @@ public class DatabaseOperator {
     private void executeEquivalentSelect(Map<String, String> params) throws SQLException {
         String table = ConfigLoader.get("table.name", "my_table");
         String condColumn = ConfigLoader.get("equivalent_select.condition_column", "test");
-        String columns = ConfigLoader.get("columns", "");
-//        String searchValue = params.getOrDefault("search_value",
-//                ConfigLoader.get("query.search_value", "default_value"));
+        String columns = ConfigLoader.get("select.columns", "id,test"); // 使用select.columns作为默认值
         String searchValue = ConfigLoader.get("search.value", "default_value");
+        
+        // 优先使用命令行参数
+        if (params.containsKey("search.value")) {
+            searchValue = params.get("search.value");
+        }
+        if (params.containsKey("select.columns")) {
+            columns = params.get("select.columns");
+        }
+        
+        // 如果columns为空，使用默认值
+        if (columns == null || columns.trim().isEmpty()) {
+            columns = "id,test";
+        }
 
         String sql = "SELECT " + columns + " FROM " + table + " WHERE " + condColumn + " = ?";
         logger.info("[等效查询] SQL: {}", sql);
+        logger.info("[等效查询] 搜索值: {}", searchValue);
 
         try (Connection conn = DatabaseUtil.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             stmt.setString(1, searchValue);
+            logger.info("[等效查询] 参数已设置: 1 = {}", searchValue);
+            logger.info("[等效查询sql语句] :  {}", sql);
+            /*
+             //主查询的sql执行
+        try (Connection conn = DatabaseUtil.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql);
+             ResultSet rs = stmt.executeQuery()) {
+
+            System.out.println("开始遍历结果集");
+            while (rs.next()) {
+                StringBuilder sb = new StringBuilder();
+                for (String col : columns.split(",")) {
+                    String c = col.trim();
+                    sb.append(c).append("=").append(rs.getString(c)).append(" ");
+                }
+                logger.info("[查询结果] {}", sb.toString());
+             */
 
             try (ResultSet rs = stmt.executeQuery()) {
-
-//                ResultSetMetaData meta = rs.getMetaData();
-//                List<String> realColumns = new ArrayList<>();
-//                for (int i = 1; i <= meta.getColumnCount(); i++) {
-//                    realColumns.add(meta.getColumnName(i));
-//                }
-
+                int rowCount = 0;
                 while (rs.next()) {
+                    rowCount++;
                     StringBuilder sb = new StringBuilder();
                     for (String col : columns.split(",")) {
                         String c = col.trim();
                         sb.append(c).append("=").append(rs.getString(c)).append(" ");
                     }
-                    logger.info("[查询结果] {}", sb.toString());
+                    logger.info("[查询结果] 第{}行: {}", rowCount, sb.toString());
                 }
+                logger.info("[等效查询] 总共返回 {} 行数据", rowCount);
             }
         }
     }

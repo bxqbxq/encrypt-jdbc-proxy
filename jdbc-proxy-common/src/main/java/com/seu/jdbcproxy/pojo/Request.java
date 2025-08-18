@@ -8,6 +8,8 @@ import java.util.Map;
 public class Request implements Serializable {
     private MessageType type;
     private String connId;
+    private String statementId;  // 新增：Statement ID
+    private String resultSetId;  // 新增：ResultSet ID
     private String sql;
     private Map<Integer,Object> params;   // 预编译参数
     private int fetchSize = 0;
@@ -36,6 +38,22 @@ public class Request implements Serializable {
 
     public void setConnId(String connId) {
         this.connId = connId;
+    }
+
+    public String getStatementId() {
+        return statementId;
+    }
+
+    public void setStatementId(String statementId) {
+        this.statementId = statementId;
+    }
+
+    public String getResultSetId() {
+        return resultSetId;
+    }
+
+    public void setResultSetId(String resultSetId) {
+        this.resultSetId = resultSetId;
     }
 
     public String getSql() {

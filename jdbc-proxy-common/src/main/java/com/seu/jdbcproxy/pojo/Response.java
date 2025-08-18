@@ -11,8 +11,14 @@ public class Response implements Serializable {
     private List<List<Object>> rows = Collections.emptyList();
     private int updateCount = 0;
     private boolean hasMoreRows = false;
-    private SQLException exception;
+    private SQLExceptionWrapper sqlException;  // 使用包装器替代原始异常
     private List<String> columnNames;
+    
+    // 新增字段
+    private String statementId;      // Statement ID
+    private String resultSetId;      // ResultSet ID
+    private long timestamp;          // 时间戳（用于心跳）
+    private String errorMessage;     // 错误消息（兼容性保留）
 
     public List<String> getColumnNames() {
         return columnNames;
@@ -22,12 +28,21 @@ public class Response implements Serializable {
         this.columnNames = columnNames;
     }
 
+    public SQLExceptionWrapper getSqlException() {
+        return sqlException;
+    }
+
+    public void setSqlException(SQLExceptionWrapper sqlException) {
+        this.sqlException = sqlException;
+    }
+    
+    // 兼容性方法
     public SQLException getException() {
-        return exception;
+        return sqlException != null ? sqlException.toSQLException() : null;
     }
 
     public void setException(SQLException exception) {
-        this.exception = exception;
+        this.sqlException = exception != null ? new SQLExceptionWrapper(exception) : null;
     }
 
     public MessageType getType() {
@@ -60,5 +75,37 @@ public class Response implements Serializable {
 
     public void setHasMoreRows(boolean hasMoreRows) {
         this.hasMoreRows = hasMoreRows;
+    }
+
+    public String getStatementId() {
+        return statementId;
+    }
+
+    public void setStatementId(String statementId) {
+        this.statementId = statementId;
+    }
+
+    public String getResultSetId() {
+        return resultSetId;
+    }
+
+    public void setResultSetId(String resultSetId) {
+        this.resultSetId = resultSetId;
+    }
+
+    public long getTimestamp() {
+        return timestamp;
+    }
+
+    public void setTimestamp(long timestamp) {
+        this.timestamp = timestamp;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
     }
 }

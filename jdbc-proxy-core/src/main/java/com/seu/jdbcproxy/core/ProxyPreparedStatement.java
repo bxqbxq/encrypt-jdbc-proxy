@@ -1,5 +1,6 @@
 package com.seu.jdbcproxy.core;
 
+import com.seu.jdbcproxy.ConfigLoader;
 import com.seu.jdbcproxy.DatabaseUtil;
 import com.seu.jdbcproxy.pojo.MessageType;
 import com.seu.jdbcproxy.pojo.Response;
@@ -156,29 +157,39 @@ public class ProxyPreparedStatement implements PreparedStatement {
     @Override
     public ResultSet executeQuery() throws SQLException {
         logger.info("executeQuery in ProxyPreparedStatement");
+        
         // 去除注释，只保留可执行 SQL
-        String pureSql = originalSql.split("--@")[0].trim();
+        if (originalSql.contains("--@extra.enabled=true")) { // 此时是额外查询
+            String pureSql = originalSql.split("--@")[0].trim();
+            PreparedStatement mainStmt = realStatement.getConnection().prepareStatement(pureSql);
+            ResultSet resultSet = mainStmt.executeQuery();
+            ProxyResultSet decryptedResultSet = new ProxyResultSet(resultSet, encryptionHelper);
 
-        PreparedStatement mainStmt = realStatement.getConnection().prepareStatement(pureSql);
-        ResultSet resultSet = mainStmt.executeQuery();
-        ProxyResultSet decryptedResultSet = new ProxyResultSet(resultSet, encryptionHelper);
-
-        // --- 处理额外查询 ---
-        if (originalSql.contains("--@extra.enabled=true")) {
             String extraTable = extractTag(originalSql, "--@extra.table=");
             String extraCols = extractTag(originalSql, "--@extra.columns=");
 
             if (!extraTable.isEmpty() && !extraCols.isEmpty()) {
                 String extraSql = "SELECT " + extraCols + " FROM " + extraTable;
+                
+                // 获取额外数据库连接URL，优先从SQL注释中获取，然后从配置中获取
+                String extraDbUrl = extractTag(originalSql, "--@extra.db.url=");
+                if (extraDbUrl.isEmpty()) {
+                    extraDbUrl = ConfigLoader.get("extra.db.url");
+                }
+                if (extraDbUrl == null || extraDbUrl.trim().isEmpty()) {
+                    // 如果没有配置额外数据库URL，使用默认配置
+                    extraDbUrl = "jdbc:mysql://localhost:3306/test_mysql";
+                }
+                
                 try (
-                        Connection extraConn = DatabaseUtil.getExtraDbConnection();
+                        Connection extraConn = DatabaseUtil.getExtraDbConnection(extraDbUrl);
                         PreparedStatement preparedStatement = extraConn.prepareStatement(extraSql,ResultSet.TYPE_SCROLL_SENSITIVE, ResultSet.CONCUR_UPDATABLE);
                         ResultSet rawextraRs = preparedStatement.executeQuery()
                         //ProxyResultSet extraRs = new ProxyResultSet(rawextraRs, encryptionHelper)
                 ) {
                     ProxyResultSet extraRs = new ProxyResultSet(rawextraRs, encryptionHelper);
                     ResultSetMetaData meta = extraRs.getMetaData();
-                    logger.info("[执行额外查询] ");
+                    logger.info("[执行额外查询] 数据库: {}, 表: {}, 列: {}", extraDbUrl, extraTable, extraCols);
                     int colCount = meta.getColumnCount();
                     while (extraRs.next()) {
                         StringBuilder sb = new StringBuilder("[额外查询结果] ");
@@ -189,8 +200,22 @@ public class ProxyPreparedStatement implements PreparedStatement {
                     }
                 }
             }
+            return decryptedResultSet;
+            
+        } else if (originalSql.toUpperCase().trim().contains("WHERE")) { // 此时是等值查询
+            // 等值查询：直接使用已经绑定参数的 realStatement 执行，避免丢失参数/加密
+            logger.info("执行等值查询，使用已绑定的参数");
+            ResultSet resultSet = realStatement.executeQuery();
+            ProxyResultSet decryptedResultSet = new ProxyResultSet(resultSet, encryptionHelper);
+            return decryptedResultSet;
+            
+        } else { // 此时是普通查询
+            // 普通查询：直接使用 realStatement 执行
+            logger.info("执行普通查询");
+            ResultSet resultSet = realStatement.executeQuery();
+            ProxyResultSet decryptedResultSet = new ProxyResultSet(resultSet, encryptionHelper);
+            return decryptedResultSet;
         }
-        return decryptedResultSet;
     }
 
     private String extractTag(String sql, String key) {
@@ -206,36 +231,36 @@ public class ProxyPreparedStatement implements PreparedStatement {
     @Override
     public void setNull(int parameterIndex, int sqlType) throws SQLException {
         while (parameterValues.size() < parameterIndex) {
-            parameterValues.add(null); // 扩展参数列表
+            parameterValues.add(null);
         }
-        parameterValues.add(parameterIndex - 1, null);
+        parameterValues.set(parameterIndex - 1, null);
         realStatement.setNull(parameterIndex, sqlType);
     }
 
     @Override
     public void setBoolean(int parameterIndex, boolean x) throws SQLException {
         while (parameterValues.size() < parameterIndex) {
-            parameterValues.add(null); // 扩展参数列表
+            parameterValues.add(null);
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setBoolean(parameterIndex, x);
     }
 
     @Override
     public void setByte(int parameterIndex, byte x) throws SQLException {
         while (parameterValues.size() < parameterIndex) {
-            parameterValues.add(null); // 扩展参数列表
+            parameterValues.add(null);
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setByte(parameterIndex, x);
     }
 
     @Override
     public void setShort(int parameterIndex, short x) throws SQLException {
         while (parameterValues.size() < parameterIndex) {
-            parameterValues.add(null); // 扩展参数列表
+            parameterValues.add(null);
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setShort(parameterIndex, x);
     }
 
@@ -243,70 +268,83 @@ public class ProxyPreparedStatement implements PreparedStatement {
     public void setInt(int parameterIndex, int x) throws SQLException {
         logger.info("setInt called for index {}: {}", parameterIndex, x);
         while (parameterValues.size() < parameterIndex) {
-            parameterValues.add(null); // 扩展参数列表
+            parameterValues.add(null);
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setInt(parameterIndex, x);
     }
 
     @Override
     public void setLong(int parameterIndex, long x) throws SQLException {
         while (parameterValues.size() < parameterIndex) {
-            parameterValues.add(null); // 扩展参数列表
+            parameterValues.add(null);
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setLong(parameterIndex, x);
     }
 
     @Override
     public void setFloat(int parameterIndex, float x) throws SQLException {
         while (parameterValues.size() < parameterIndex) {
-            parameterValues.add(null); // 扩展参数列表
+            parameterValues.add(null);
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setFloat(parameterIndex, x);
     }
 
     @Override
     public void setDouble(int parameterIndex, double x) throws SQLException {
         while (parameterValues.size() < parameterIndex) {
-            parameterValues.add(null); // 扩展参数列表
+            parameterValues.add(null);
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setDouble(parameterIndex, x);
     }
 
     @Override
     public void setBigDecimal(int parameterIndex, BigDecimal x) throws SQLException {
         while (parameterValues.size() < parameterIndex) {
-            parameterValues.add(null); // 扩展参数列表
+            parameterValues.add(null);
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setBigDecimal(parameterIndex, x);
     }
 
     @Override
     public void setString(int parameterIndex, String x) throws SQLException {
-//        logger.info("setString called for index {}: {}", parameterIndex, x);
-//        while (parameterValues.size() < parameterIndex) {
-//            parameterValues.add(null); // 扩展参数列表
-//        }
-//        String sql = originalSql.toUpperCase().trim();
-//        if(sql.startsWith("SELECT")) {
-//            // 加密参数
-//            try {
-//                x = encryptionHelper.encrypt(x);
-//            } catch (Exception e) {
-//                throw new RuntimeException(e);
-//            }
-//        }
-//        parameterValues.add(parameterIndex - 1, x);
-//
-//        // 设置加密后的参数到 realStatement
-//        realStatement.setString(parameterIndex, x);
-//
-//        logger.info("Encrypted parameter {}: {}", parameterIndex, x);
-        setObject(parameterIndex, x);
+        logger.info("setString called for index {}: {}", parameterIndex, x);
+        
+        // 确保参数列表足够大
+        while (parameterValues.size() < parameterIndex) {
+            parameterValues.add(null);
+        }
+        
+        // 使用set方法替换指定位置的参数
+        parameterValues.set(parameterIndex - 1, x);
+        
+        String sql = originalSql.toUpperCase().trim();
+        // 对于SELECT语句，需要根据查询类型决定是否加密参数
+        if (sql.startsWith("SELECT")) {
+            // 检查是否是等值查询的WHERE条件
+            if (sql.contains("WHERE") && sql.contains("=")) {
+                // 等值查询，需要加密参数以匹配数据库中的密文
+                try {
+                    String encrypted = encryptionHelper.encrypt(x);
+                    logger.info("等值查询参数已加密: {} = {} -> {}", parameterIndex, x, encrypted);
+                    realStatement.setString(parameterIndex, encrypted);
+                    logger.info("插入之后的 sql : {} " + realStatement.toString());
+                } catch (Exception e) {
+                    throw new SQLException("加密参数失败", e);
+                }
+            } else {
+                // 其他SELECT查询（如全表查询），不需要加密参数
+                logger.info("普通查询参数，不加密: {} = {}", parameterIndex, x);
+                realStatement.setString(parameterIndex, x);
+            }
+        } else {
+            // 非SELECT语句，直接设置
+            realStatement.setString(parameterIndex, x);
+        }
     }
 
     @Override
@@ -314,7 +352,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setBytes(parameterIndex, x);
     }
 
@@ -323,7 +361,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setDate(parameterIndex, x);
     }
 
@@ -332,7 +370,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setTime(parameterIndex, x);
     }
 
@@ -341,7 +379,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setTimestamp(parameterIndex, x);
     }
 
@@ -350,7 +388,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setAsciiStream(parameterIndex, x, length);
     }
 
@@ -359,7 +397,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setUnicodeStream(parameterIndex, x, length);
     }
 
@@ -368,7 +406,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setBinaryStream(parameterIndex, x, length);
     }
 
@@ -391,22 +429,33 @@ public class ProxyPreparedStatement implements PreparedStatement {
 
     @Override
     public void setObject(int parameterIndex, Object x) throws SQLException {
+        // 确保参数列表足够大
         while (parameterValues.size() < parameterIndex) {
-            parameterValues.add(null); // Ensure the list is big enough
+            parameterValues.add(null);
         }
-        parameterValues.add(parameterIndex - 1, x);
+        
+        // 使用set方法替换指定位置的参数，而不是add
+        parameterValues.set(parameterIndex - 1, x);
+        
         String sql = originalSql.toUpperCase().trim();
+        // 对于SELECT语句，需要根据查询类型决定是否加密参数
         if (x instanceof String str && sql.startsWith("SELECT")) {
-            try {
-                x = encryptionHelper.encrypt(x.toString());
-            } catch (Exception e) {
-                throw new SQLException(e);
+            // 检查是否是等值查询的WHERE条件
+            if (sql.contains("WHERE") && sql.contains("=")) {
+                // 等值查询，需要加密参数以匹配数据库中的密文
+                try {
+                    x = encryptionHelper.encrypt(x.toString());
+                    logger.info("等值查询参数已加密: {} = {} -> {}", parameterIndex, str, x);
+                } catch (Exception e) {
+                    throw new SQLException("加密参数失败", e);
+                }
+            } else {
+                // 其他SELECT查询（如全表查询），不需要加密参数
+                logger.info("普通查询参数，不加密: {} = {}", parameterIndex, x);
             }
         }
 
         realStatement.setObject(parameterIndex, x);
-
-
     }
 
     @Override
@@ -424,7 +473,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, reader);
+        parameterValues.set(parameterIndex - 1, reader);
         realStatement.setCharacterStream(parameterIndex, reader, length);
     }
 
@@ -433,7 +482,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setRef(parameterIndex, x);
     }
 
@@ -442,7 +491,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setBlob(parameterIndex, x);
     }
 
@@ -451,7 +500,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setClob(parameterIndex, x);
     }
 
@@ -460,7 +509,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setArray(parameterIndex, x);
     }
 
@@ -475,7 +524,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setDate(parameterIndex, x, cal);
     }
 
@@ -484,7 +533,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setTime(parameterIndex, x, cal);
     }
 
@@ -493,7 +542,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setTimestamp(parameterIndex, x, cal);
     }
 
@@ -502,7 +551,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, null);
+        parameterValues.set(parameterIndex - 1, null);
         realStatement.setNull(parameterIndex, sqlType, typeName);
     }
 
@@ -511,7 +560,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setURL(parameterIndex, x);
     }
 
@@ -525,7 +574,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setRowId(parameterIndex, x);
     }
 
@@ -534,7 +583,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, value);
+        parameterValues.set(parameterIndex - 1, value);
         realStatement.setNString(parameterIndex, value);
     }
 
@@ -543,7 +592,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, value);
+        parameterValues.set(parameterIndex - 1, value);
         realStatement.setNCharacterStream(parameterIndex, value, length);
     }
 
@@ -552,7 +601,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, value);
+        parameterValues.set(parameterIndex - 1, value);
         realStatement.setNClob(parameterIndex, value);
     }
 
@@ -561,7 +610,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, reader);
+        parameterValues.set(parameterIndex - 1, reader);
         realStatement.setClob(parameterIndex, reader, length);
     }
 
@@ -570,7 +619,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, inputStream);
+        parameterValues.set(parameterIndex - 1, inputStream);
         realStatement.setBlob(parameterIndex, inputStream, length);
     }
 
@@ -579,7 +628,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, reader);
+        parameterValues.set(parameterIndex - 1, reader);
         realStatement.setNClob(parameterIndex, reader, length);
     }
 
@@ -588,7 +637,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, xmlObject);
+        parameterValues.set(parameterIndex - 1, xmlObject);
         realStatement.setSQLXML(parameterIndex, xmlObject);
     }
 
@@ -597,7 +646,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setObject(parameterIndex, x, targetSqlType, scaleOrLength);
     }
 
@@ -606,7 +655,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setAsciiStream(parameterIndex, x, length);
     }
 
@@ -615,7 +664,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setBinaryStream(parameterIndex, x, length);
     }
 
@@ -624,7 +673,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, reader);
+        parameterValues.set(parameterIndex - 1, reader);
         realStatement.setCharacterStream(parameterIndex, reader, length);
     }
 
@@ -633,7 +682,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setAsciiStream(parameterIndex, x);
     }
 
@@ -642,7 +691,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, x);
+        parameterValues.set(parameterIndex - 1, x);
         realStatement.setBinaryStream(parameterIndex, x);
     }
 
@@ -651,7 +700,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, reader);
+        parameterValues.set(parameterIndex - 1, reader);
         realStatement.setCharacterStream(parameterIndex, reader);
     }
 
@@ -660,7 +709,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, value);
+        parameterValues.set(parameterIndex - 1, value);
         realStatement.setNCharacterStream(parameterIndex, value);
     }
 
@@ -669,7 +718,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, reader);
+        parameterValues.set(parameterIndex - 1, reader);
         realStatement.setClob(parameterIndex, reader);
     }
 
@@ -678,7 +727,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, inputStream);
+        parameterValues.set(parameterIndex - 1, inputStream);
         realStatement.setBlob(parameterIndex, inputStream);
     }
 
@@ -687,7 +736,7 @@ public class ProxyPreparedStatement implements PreparedStatement {
         while (parameterValues.size() < parameterIndex) {
             parameterValues.add(null); // 扩展参数列表
         }
-        parameterValues.add(parameterIndex - 1, reader);
+        parameterValues.set(parameterIndex - 1, reader);
         realStatement.setNClob(parameterIndex, reader);
     }
 
